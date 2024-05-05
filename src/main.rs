@@ -1,21 +1,30 @@
-use std::fs::{DirEntry, File, read_dir};
+use std::fs::{self, read_dir, DirEntry, File};
 use std::io::{Error, Read};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Number, Value};
+use chrono::Local;
 
+// Todos:
+//  - do not create notebook with same name, use that.
+//  - do not create notebook, if no children. 
+//  - better messaging!
+
+#[derive(Debug)]
 #[derive(Serialize, Deserialize)]
+#[serde(untagged)]
 enum CodexItem {
     Notebook(Notebook),
     Note(Note)
 }
 
+#[derive(Debug)]
 #[derive(Serialize, Deserialize)]
 struct RootItem {
-    schema_version: Number,
+    schema_version: u32,
     items: Vec<CodexItem>,
 }
 
+#[derive(Debug)]
 #[derive(Serialize, Deserialize)]
 struct Notebook {
     color: String,
@@ -26,6 +35,7 @@ struct Notebook {
     opened: bool
 }
 
+#[derive(Debug)]
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Note {
@@ -38,13 +48,12 @@ struct Note {
     text_content: String
 }
 
-
 fn main() {
     //read_files();
     edit_save_json();
 }
 
-fn read_files() {
+fn read_filenames() -> Vec<String> {
     // read files in codex/notes/
     let mut filenames_in_dir: Vec<String> = Vec::new();
     match read_dir("/home/khamui/.config/codex/notes/") {
@@ -57,7 +66,7 @@ fn read_files() {
             eprintln!("{}", e);
         }
     }
-    println!("{:?}", filenames_in_dir)
+    filenames_in_dir
 }
 
 // helper: read_files()
@@ -84,62 +93,98 @@ fn edit_save_json() {
         Err(_) => String::from("Reading file into buffer not possible!")
     };
 
-    let json: RootItem = serde_json::from_str::<RootItem>(&json_as_string)
+    let mut json: RootItem = serde_json::from_str::<RootItem>(&json_as_string)
         .expect("Error parsing as json");
 
     // Desctructure and check if at least one "items" is an array
-    recurse_and_find_items(json.items);
+    let all_filenames_in_json: Vec<String> = get_identifiers_of(&json.items);
+    let all_filenames_in_filetree: Vec<String> = read_filenames();
+    //println!("json: {:?}, filetree: {:?}", all_filenames_in_json, all_filenames_in_filetree);
+    let delta_filenames = get_delta(all_filenames_in_json, all_filenames_in_filetree);
+    //println!("{:?}", json);
 
-    //let new_notebook = Notebook {
-    //    color: "#999999".to_owned(),
-    //    icon: "book-2".to_owned(),
-    //    id: "xx".to_owned(),
-    //    name: "Autogen from Codex-Importer".to_owned(),
-    //    opened: true,
-    //    children: vec!()
-    //};
+    let notes = create_notebook_children(delta_filenames);
+    let notebook = create_notebook(notes);
 
-    // 2. traverse through all children and item>>children and compare
-    //    if matched filenames found. Only keep those which did not match.
+    json.items.push(CodexItem::Notebook(notebook));
 
-    // 3. create new item (book, maybe with date) and insert children for each
-    //    not-matched. The signature is as follows:
-    //    {
-    //      "name": "Example Note",
-    //      "id": "1a80bb86-467d-40fa-b35f-64c58e69a51e",
-    //      "color": "#999999",
-    //      "icon": "file-text",
-    //      "fileName": "Example-Note1a80bb86-467d-40",
-    //      "textContent": "",
-    //      "favorited": false
-    //    },
+    let new_save_json = match serde_json::to_string(&json) {
+        Ok(nb_string) => nb_string,
+        Err(e) => {
+            eprint!("{e}");
+            String::new()
+        }
+    };
+
+    match fs::write("/home/khamui/.config/codex/save.json", new_save_json) {
+        Ok(_) => println!("File successfully written!"),
+        Err(e) => eprintln!("{e}")
+    }
 }
 
 // helper: edit_save_json()
-fn recurse_and_find_items(items: Vec<CodexItem>) {
-    let mut item_names: Vec<String> = vec!();
+fn get_identifiers_of(items: &Vec<CodexItem>) -> Vec<String> {
+    let mut items_filenames: Vec<String> = vec!();
     for item in items {
         match item {
             CodexItem::Note(note) => {
-                item_names.push(note.name);
+                items_filenames.push(note.file_name.clone());
             },
             CodexItem::Notebook(notebook) => {
-                item_names.push(notebook.name);
-                recurse_and_find_items(notebook.children);
+                get_identifiers_of(&notebook.children);
             }
         }
-        //if item.get("children") != None {
-        //    recurse_and_find_items(item["children"].as_array())
-        //}
     }
-    println!("{:?}", item_names);
+    items_filenames
 }
 
 // helper: edit_save_json()
-fn keep_to_be_migrated() {
-    // compare files with save.json entries
+// FIXME: if json has note, but according file is missing, it remains in .json
+fn get_delta(node_filenames: Vec<String>, tree_filenames: Vec<String>) -> Vec<String> {
+    let mut delta: Vec<String> = vec![];
+
+    for tree_fname in tree_filenames {
+        if !node_filenames.contains(&tree_fname) {
+            delta.push(tree_fname);
+        };
+    }
+    delta
 }
 
-fn save_json() {
-    // save save.json
+fn create_notebook_children(notenames: Vec<String>) -> Vec<Note> {
+    // create items of type Note for each input Vec items
+    let mut notes: Vec<Note> = vec!();
+    for (index, notename) in notenames.iter().enumerate() {
+        let create_dt = format!("{}", Local::now().format("%Y%m%d"));
+        let id = format!("automated_note_{}_{}", index + 1, &create_dt);
+        let name = format!("unnamed {}", index + 1);
+
+        notes.push(Note {
+            color: "#999999".to_owned(),
+            icon: String::from("file-text"),
+            id,
+            name,
+            favorited: false,
+            file_name: notename.to_owned(),
+            text_content: String::from("")
+        });
+    }
+    notes
+}
+
+fn create_notebook(children: Vec<Note>) -> Notebook {
+    // create one notebook to bundle all automatically added notes
+    let create_dt = format!("{}", Local::now().format("%Y%m%d"));
+    let id = format!("automated_{}", &create_dt);
+    let name = format!("AUTO NOTEBOOK ({})", &create_dt);
+    let codex_children = children.into_iter().map(CodexItem::Note).collect();
+
+    Notebook {
+        color: "#00CD00".to_owned(),
+        icon: "book-2".to_owned(),
+        id,
+        name,
+        opened: true,
+        children: codex_children
+    }
 }
