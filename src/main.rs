@@ -7,7 +7,9 @@ use chrono::Local;
 // Todos:
 //  - do not create notebook with same name, use that.
 //  - do not create notebook, if no children. 
+//  - save save.json files as backup.
 //  - better messaging!
+//  - stop codex and restart after import
 
 #[derive(Debug)]
 #[derive(Serialize, Deserialize)]
