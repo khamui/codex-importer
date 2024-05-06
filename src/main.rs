@@ -6,7 +6,6 @@ use chrono::Local;
 
 // Todos:
 //  - do not create notebook with same name, use that.
-//  - do not create notebook, if no children. 
 //  - save save.json files as backup.
 //  - better messaging!
 //  - stop codex and restart after import
@@ -108,19 +107,23 @@ fn edit_save_json() {
     let notes = create_notebook_children(delta_filenames);
     let notebook = create_notebook(notes);
 
-    json.items.push(CodexItem::Notebook(notebook));
+    if !notebook.is_none() {
+        json.items.push(CodexItem::Notebook(notebook.unwrap()));
 
-    let new_save_json = match serde_json::to_string(&json) {
-        Ok(nb_string) => nb_string,
-        Err(e) => {
-            eprint!("{e}");
-            String::new()
+        let new_save_json = match serde_json::to_string(&json) {
+            Ok(nb_string) => nb_string,
+            Err(e) => {
+                eprint!("{e}");
+                String::new()
+            }
+        };
+
+        match fs::write("/home/khamui/.config/codex/save.json", new_save_json) {
+            Ok(_) => println!("File successfully written!"),
+            Err(e) => eprintln!("{e}")
         }
-    };
-
-    match fs::write("/home/khamui/.config/codex/save.json", new_save_json) {
-        Ok(_) => println!("File successfully written!"),
-        Err(e) => eprintln!("{e}")
+    } else {
+        println!("Nothing imported. All up to date!")
     }
 }
 
@@ -174,19 +177,24 @@ fn create_notebook_children(notenames: Vec<String>) -> Vec<Note> {
     notes
 }
 
-fn create_notebook(children: Vec<Note>) -> Notebook {
+fn create_notebook(children: Vec<Note>) -> Option<Notebook> {
     // create one notebook to bundle all automatically added notes
+   
+    if children.is_empty() {
+        return None;
+    }
+
     let create_dt = format!("{}", Local::now().format("%Y%m%d"));
     let id = format!("automated_{}", &create_dt);
     let name = format!("AUTO NOTEBOOK ({})", &create_dt);
     let codex_children = children.into_iter().map(CodexItem::Note).collect();
 
-    Notebook {
+    Some(Notebook {
         color: "#00CD00".to_owned(),
         icon: "book-2".to_owned(),
         id,
         name,
         opened: true,
         children: codex_children
-    }
+    })
 }
