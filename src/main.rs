@@ -1,10 +1,14 @@
 use std::fs::{self, read_dir, DirEntry, File};
 use std::io::{Error, Read};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use chrono::Local;
+use clap::Parser;
 
 // Todos:
+//  - copy files from specified import path first!
+//  - remove /notes/* which are not used. and make import folder specifiable
 //  - do not create notebook with same name, use that.
 //  - save save.json files as backup.
 //  - better messaging!
@@ -49,15 +53,28 @@ struct Note {
     text_content: String
 }
 
-fn main() {
-    //read_files();
-    edit_save_json();
+#[derive(Parser, Debug)]
+struct Args {
+    /// Path to import files
+    #[arg(short, long)]
+    path: PathBuf
 }
 
-fn read_filenames() -> Vec<String> {
+fn main() {
+    //read_files();
+    let args = Args::parse();
+    if args.path.exists() {
+        println!("Success: {:?}", args.path);
+        edit_save_json(args.path);
+    } else {
+        println!("Path does not exist: {:?}", args);
+    };
+}
+
+fn read_filenames(import_path: PathBuf) -> Vec<String> {
     // read files in codex/notes/
     let mut filenames_in_dir: Vec<String> = Vec::new();
-    match read_dir("/home/khamui/.config/codex/notes/") {
+    match import_path.read_dir() {
         Ok(dir) => {
             for entry in dir {
                 filenames_in_dir.push(get_filename_of(entry));
@@ -82,7 +99,7 @@ fn get_filename_of(entry: Result<DirEntry, Error>) -> String {
     filename_str.expect("Could not figure out filename!")
 }
 
-fn edit_save_json() {
+fn edit_save_json(import_path: PathBuf) {
     // open save.json file
     let mut file = File::open("/home/khamui/.config/codex/save.json")
         .expect("Reading save.json not possible");
@@ -99,7 +116,7 @@ fn edit_save_json() {
 
     // Desctructure and check if at least one "items" is an array
     let all_filenames_in_json: Vec<String> = get_identifiers_of(&json.items);
-    let all_filenames_in_filetree: Vec<String> = read_filenames();
+    let all_filenames_in_filetree: Vec<String> = read_filenames(import_path);
     //println!("json: {:?}, filetree: {:?}", all_filenames_in_json, all_filenames_in_filetree);
     let delta_filenames = get_delta(all_filenames_in_json, all_filenames_in_filetree);
     //println!("{:?}", json);
@@ -179,7 +196,7 @@ fn create_notebook_children(notenames: Vec<String>) -> Vec<Note> {
 
 fn create_notebook(children: Vec<Note>) -> Option<Notebook> {
     // create one notebook to bundle all automatically added notes
-   
+
     if children.is_empty() {
         return None;
     }
