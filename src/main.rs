@@ -1,4 +1,4 @@
-use std::fs::{self, read_dir, DirEntry, File};
+use std::fs::{self, DirEntry, File};
 use std::io::{Error, Read};
 use std::path::PathBuf;
 
@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 use chrono::Local;
 use clap::Parser;
 
+const NOTES_PATH: &str = "/home/khamui/.config/codex/notes/";
 // Todos:
-//  - copy files from specified import path first!
-//  - remove /notes/* which are not used. and make import folder specifiable
+//  - copy files from specified import path first! [done]
+//  - remove /notes/* which are not in save.json
 //  - do not create notebook with same name, use that.
 //  - save save.json files as backup.
 //  - better messaging!
@@ -71,7 +72,7 @@ fn main() {
     };
 }
 
-fn read_filenames(import_path: PathBuf) -> Vec<String> {
+fn read_filenames(import_path: &PathBuf) -> Vec<String> {
     // read files in codex/notes/
     let mut filenames_in_dir: Vec<String> = Vec::new();
     match import_path.read_dir() {
@@ -116,12 +117,14 @@ fn edit_save_json(import_path: PathBuf) {
 
     // Desctructure and check if at least one "items" is an array
     let all_filenames_in_json: Vec<String> = get_identifiers_of(&json.items);
-    let all_filenames_in_filetree: Vec<String> = read_filenames(import_path);
+    let all_filenames_in_filetree: Vec<String> = read_filenames(&import_path);
     //println!("json: {:?}, filetree: {:?}", all_filenames_in_json, all_filenames_in_filetree);
-    let delta_filenames = get_delta(all_filenames_in_json, all_filenames_in_filetree);
-    //println!("{:?}", json);
+    let (delta_tree_filenames, delta_node_filenames) =
+        get_deltas(all_filenames_in_json, all_filenames_in_filetree);
+    //println!("to be copied and imported {:?}", delta_tree_filenames);
 
-    let notes = create_notebook_children(delta_filenames);
+    copy_notes_files(import_path, &delta_tree_filenames);
+    let notes = create_notebook_children(delta_tree_filenames);
     let notebook = create_notebook(notes);
 
     if !notebook.is_none() {
@@ -160,17 +163,35 @@ fn get_identifiers_of(items: &Vec<CodexItem>) -> Vec<String> {
     items_filenames
 }
 
+// case a: a exists in json, but not as file --> copy a
+// case b: b already exists in save.json and as file. --> msg
+// case c: c is stale. -> remove json-node of c from save.json
+// case d: d to be imported -> create notebook and note(s) --> [done]
+// [a,b,c] -> save.json
+// [b] -> /codex/notes
+// [a,b,d] -> /import_folder
+
 // helper: edit_save_json()
 // FIXME: if json has note, but according file is missing, it remains in .json
-fn get_delta(node_filenames: Vec<String>, tree_filenames: Vec<String>) -> Vec<String> {
-    let mut delta: Vec<String> = vec![];
+fn get_deltas(node_filenames: Vec<String>, tree_filenames: Vec<String>) -> (Vec<String>, Vec<String>) {
+    let mut delta_tree: Vec<String> = vec![];
 
-    for tree_fname in tree_filenames {
+    for tree_fname in tree_filenames.clone() {
         if !node_filenames.contains(&tree_fname) {
-            delta.push(tree_fname);
+            delta_tree.push(tree_fname.clone());
         };
     }
-    delta
+
+    let mut delta_node: Vec<String> = vec![];
+
+    for node_fname in node_filenames {
+        if !delta_tree.contains(&node_fname) {
+            delta_node.push(node_fname.clone());
+        };
+    }
+
+
+    (delta_tree, delta_node)
 }
 
 fn create_notebook_children(notenames: Vec<String>) -> Vec<Note> {
@@ -214,4 +235,21 @@ fn create_notebook(children: Vec<Note>) -> Option<Notebook> {
         opened: true,
         children: codex_children
     })
+}
+
+fn copy_notes_files(import_path: PathBuf, filenames: &Vec<String>) {
+    let notes_path = PathBuf::from(NOTES_PATH);
+    for filename in filenames {
+        let dest_path = notes_path.join(filename);
+        let source_path = import_path.join(filename);
+
+        match fs::copy(&source_path, &dest_path) {
+            Ok(_) => println!("Note {} file copied successfully.", filename),
+            Err(e) => eprintln!("{}", e)
+        }
+    }
+}
+
+fn delete_stale(notes: Vec<Note>) {
+    //
 }
