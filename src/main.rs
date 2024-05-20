@@ -7,7 +7,7 @@
 
 // Todos:
 //  - copy files from specified import path first! [done]
-//  - remove /notes/* which are not in save.json
+//  - remove /notes/* which are not in save.json [done]
 //  - do not create notebook with same name, use that.
 //  - save save.json files as backup.
 //  - better messaging!
@@ -130,32 +130,36 @@ fn edit_save_json(import_path: PathBuf) {
     let (delta_tree_filenames, delta_node_filenames) =
         get_deltas(&all_filenames_in_json, &all_filenames_in_filetree);
 
-    println!("delta files {:?}", &delta_tree_filenames);
+    //println!("delta files {:?}", &delta_tree_filenames);
     //println!("all json {:?}", &all_filenames_in_json);
     //println!("delta json {:?}", &delta_node_filenames);
     //println!("json content {:?}", &json.items);
 
     copy_notes_files(import_path, &all_filenames_in_filetree);
+    delete_stale(delta_node_filenames, &mut json);
+
+    println!("json content {:?}", &json.items);
+
     let notes = create_notebook_children(delta_tree_filenames);
     let notebook = create_notebook(notes);
 
     if !notebook.is_none() {
         json.items.push(CodexItem::Notebook(notebook.unwrap()));
-
-        let new_save_json = match serde_json::to_string(&json) {
-            Ok(nb_string) => nb_string,
-            Err(e) => {
-                eprint!("{e}");
-                String::new()
-            }
-        };
-
-        match fs::write(SAVE_JSON_PATH, new_save_json) {
-            Ok(_) => println!("File successfully written!"),
-            Err(e) => eprintln!("{e}")
-        }
     } else {
         println!("Nothing imported. All up to date!")
+    }
+
+    let new_save_json = match serde_json::to_string(&json) {
+        Ok(nb_string) => nb_string,
+        Err(e) => {
+            eprint!("{e}");
+            String::new()
+        }
+    };
+
+    match fs::write(SAVE_JSON_PATH, new_save_json) {
+        Ok(_) => println!("File successfully written!"),
+        Err(e) => eprintln!("{e}")
     }
 }
 
@@ -179,7 +183,7 @@ fn get_identifiers_of(items: &Vec<CodexItem>) -> Vec<String> {
 
 // case a: a exists in json, but not as file --> copy a --> [done]
 // case b: b already exists in save.json and as file. --> msg
-// case c: c is stale. -> remove json-node of c from save.json
+// case c: c is stale. -> remove json-node of c from save.json --> [done]
 // case d: d to be copied and imported as unnamed -> create notebook and note(s) --> [done]
 // [a,b,c] -> save.json
 // [b] -> /codex/notes
@@ -200,7 +204,7 @@ fn get_deltas(node_filenames: &Vec<String>, tree_filenames: &Vec<String>) -> (Ve
     let mut delta_node: Vec<String> = vec![];
 
     for node_fname in node_filenames {
-        if delta_tree.contains(&node_fname) {
+        if !tree_filenames.contains(&node_fname) {
             delta_node.push(node_fname.clone());
         };
     }
@@ -264,6 +268,12 @@ fn copy_notes_files(import_path: PathBuf, filenames: &Vec<String>) {
     }
 }
 
-fn delete_stale(notes: Vec<Note>) {
-    //
+fn delete_stale(notes_fnames: Vec<String>, json: &mut RootItem) ->  &mut RootItem {
+    json.items.retain(|item| {
+        match item {
+            CodexItem::Note(note) => !notes_fnames.contains(&note.file_name),
+            CodexItem::Notebook(_) => true
+        }
+    });
+    json
 }
