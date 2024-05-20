@@ -1,3 +1,18 @@
+//! starting the program to import file(s) under given path.
+//!
+//! To import notes into codex, this program *synchronizes the save.json
+//! with the note-files in the folder of the given path.
+//! - save.json: stores the state of notes and notebooks (load & save)
+//! - path: cmd line arg of path, where note files are stored to be imported
+
+// Todos:
+//  - copy files from specified import path first! [done]
+//  - remove /notes/* which are not in save.json
+//  - do not create notebook with same name, use that.
+//  - save save.json files as backup.
+//  - better messaging!
+//  - stop codex and restart after import
+
 use std::fs::{self, DirEntry, File};
 use std::io::{Error, Read};
 use std::path::PathBuf;
@@ -7,14 +22,9 @@ use chrono::Local;
 use clap::Parser;
 
 const NOTES_PATH: &str = "/home/khamui/.config/codex/notes/";
-// Todos:
-//  - copy files from specified import path first! [done]
-//  - remove /notes/* which are not in save.json
-//  - do not create notebook with same name, use that.
-//  - save save.json files as backup.
-//  - better messaging!
-//  - stop codex and restart after import
+const SAVE_JSON_PATH: &str = "/home/khamui/.config/codex/save.json";
 
+/// custom types used to type input json tree
 #[derive(Debug)]
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
@@ -61,19 +71,19 @@ struct Args {
     path: PathBuf
 }
 
+/// entry point
 fn main() {
-    //read_files();
     let args = Args::parse();
     if args.path.exists() {
-        println!("Success: {:?}", args.path);
+        println!("Processing notes in {:?}.", args.path);
         edit_save_json(args.path);
     } else {
-        println!("Path does not exist: {:?}", args);
+        println!("The specified path \"{:?}\" does not exist.", args);
     };
 }
 
+/// reading filenames of given path.
 fn read_filenames(import_path: &PathBuf) -> Vec<String> {
-    // read files in codex/notes/
     let mut filenames_in_dir: Vec<String> = Vec::new();
     match import_path.read_dir() {
         Ok(dir) => {
@@ -88,7 +98,7 @@ fn read_filenames(import_path: &PathBuf) -> Vec<String> {
     filenames_in_dir
 }
 
-// helper: read_files()
+/// extracting filename from DirEntry
 fn get_filename_of(entry: Result<DirEntry, Error>) -> String {
     let filename_str = entry.map(|en| en
         .path()
@@ -97,19 +107,18 @@ fn get_filename_of(entry: Result<DirEntry, Error>) -> String {
         .to_string_lossy()
         .into_owned()
     );
-    filename_str.expect("Could not figure out filename!")
+    filename_str.expect("Not able to get filename.")
 }
 
+/// editing save.json based on files found under import path.
+/// - argument: import_path
 fn edit_save_json(import_path: PathBuf) {
-    // open save.json file
-    let mut file = File::open("/home/khamui/.config/codex/save.json")
-        .expect("Reading save.json not possible");
-
+    let mut file = File::open(SAVE_JSON_PATH)
+        .expect("Reading save.json not possible.");
     let mut buffer = String::new();
-
     let json_as_string = match file.read_to_string(&mut buffer) {
         Ok(_) => buffer,
-        Err(_) => String::from("Reading file into buffer not possible!")
+        Err(_) => String::from("Reading file into buffer not possible.")
     };
 
     let mut json: RootItem = serde_json::from_str::<RootItem>(&json_as_string)
@@ -118,12 +127,15 @@ fn edit_save_json(import_path: PathBuf) {
     // Desctructure and check if at least one "items" is an array
     let all_filenames_in_json: Vec<String> = get_identifiers_of(&json.items);
     let all_filenames_in_filetree: Vec<String> = read_filenames(&import_path);
-    //println!("json: {:?}, filetree: {:?}", all_filenames_in_json, all_filenames_in_filetree);
     let (delta_tree_filenames, delta_node_filenames) =
-        get_deltas(all_filenames_in_json, all_filenames_in_filetree);
-    //println!("to be copied and imported {:?}", delta_tree_filenames);
+        get_deltas(&all_filenames_in_json, &all_filenames_in_filetree);
 
-    copy_notes_files(import_path, &delta_tree_filenames);
+    println!("delta files {:?}", &delta_tree_filenames);
+    //println!("all json {:?}", &all_filenames_in_json);
+    //println!("delta json {:?}", &delta_node_filenames);
+    //println!("json content {:?}", &json.items);
+
+    copy_notes_files(import_path, &all_filenames_in_filetree);
     let notes = create_notebook_children(delta_tree_filenames);
     let notebook = create_notebook(notes);
 
@@ -138,7 +150,7 @@ fn edit_save_json(import_path: PathBuf) {
             }
         };
 
-        match fs::write("/home/khamui/.config/codex/save.json", new_save_json) {
+        match fs::write(SAVE_JSON_PATH, new_save_json) {
             Ok(_) => println!("File successfully written!"),
             Err(e) => eprintln!("{e}")
         }
@@ -156,26 +168,29 @@ fn get_identifiers_of(items: &Vec<CodexItem>) -> Vec<String> {
                 items_filenames.push(note.file_name.clone());
             },
             CodexItem::Notebook(notebook) => {
-                get_identifiers_of(&notebook.children);
+                let mut items_filenames_recursed =
+                    get_identifiers_of(&notebook.children);
+                items_filenames.append(&mut items_filenames_recursed);
             }
         }
     }
     items_filenames
 }
 
-// case a: a exists in json, but not as file --> copy a
+// case a: a exists in json, but not as file --> copy a --> [done]
 // case b: b already exists in save.json and as file. --> msg
 // case c: c is stale. -> remove json-node of c from save.json
-// case d: d to be imported -> create notebook and note(s) --> [done]
+// case d: d to be copied and imported as unnamed -> create notebook and note(s) --> [done]
 // [a,b,c] -> save.json
 // [b] -> /codex/notes
 // [a,b,d] -> /import_folder
 
 // helper: edit_save_json()
 // FIXME: if json has note, but according file is missing, it remains in .json
-fn get_deltas(node_filenames: Vec<String>, tree_filenames: Vec<String>) -> (Vec<String>, Vec<String>) {
+fn get_deltas(node_filenames: &Vec<String>, tree_filenames: &Vec<String>) -> (Vec<String>, Vec<String>) {
     let mut delta_tree: Vec<String> = vec![];
 
+    // delta_tree collects all files, which are not in node_filenames yet
     for tree_fname in tree_filenames.clone() {
         if !node_filenames.contains(&tree_fname) {
             delta_tree.push(tree_fname.clone());
@@ -185,11 +200,10 @@ fn get_deltas(node_filenames: Vec<String>, tree_filenames: Vec<String>) -> (Vec<
     let mut delta_node: Vec<String> = vec![];
 
     for node_fname in node_filenames {
-        if !delta_tree.contains(&node_fname) {
+        if delta_tree.contains(&node_fname) {
             delta_node.push(node_fname.clone());
         };
     }
-
 
     (delta_tree, delta_node)
 }
